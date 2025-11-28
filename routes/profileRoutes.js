@@ -7,12 +7,21 @@ const router = express.Router();
 
 // ----------------------------
 // REGISTER
-// ----------------------------
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, phone, state, pincode, address } = req.body;
+    const {
+      name,
+      email,
+      password,
+      phone,
+      state,
+      pincode,
+      address,
+      role = "user",
+      adminCode,
+    } = req.body;
 
-    // Check missing fields
+    // Check required fields
     if (
       !name ||
       !email ||
@@ -25,16 +34,23 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
-    // Check user exists
+    // Check if user already exists
     const existing = await profiles.findOne({ email });
     if (existing) {
       return res.status(400).json({ message: "Email already exists" });
     }
 
+    // If role is admin, check adminCode
+    if (role === "admin") {
+      if (adminCode !== process.env.ADMIN_CODE) {
+        return res.status(403).json({ message: "Invalid admin code" });
+      }
+    }
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create profile
+    // Create new user
     const newUser = await profiles.create({
       name,
       email,
@@ -43,11 +59,766 @@ router.post("/register", async (req, res) => {
       state,
       pincode,
       address,
+      role,
     });
 
     res.status(201).json({
       message: "User registered successfully",
-      user: newUser,
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        imageUrl: newUser.imageUrl,
+        phone: newUser.phone,
+        state: newUser.state,
+        pincode: newUser.pincode,
+        address: newUser.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// LOGIN
+// ----------------------------
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await profiles.findOne({ email });
+    if (!user) return res.status(400).json({ message: "Invalid email" });
+
+    const passMatch = await bcrypt.compare(password, user.password);
+    if (!passMatch)
+      return res.status(400).json({ message: "Invalid password" });
+
+    // Generate Access Token
+    const accessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Generate Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_REFRESH_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    // Save refresh token in DB
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({
+      message: "Login successful",
+      accessToken,
+      refreshToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        imageUrl: user.imageUrl,
+        phone: user.phone,
+        state: user.state,
+        pincode: user.pincode,
+        address: user.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// UPDATE PROFILE (phone, pincode, state, address INCLUDED)
+// ----------------------------
+router.put("/update/:id", async (req, res) => {
+  try {
+    const { name, phone, state, pincode, address, imageUrl } = req.body;
+
+    const updated = await profiles.findByIdAndUpdate(
+      req.params.id,
+      { name, phone, state, pincode, address, imageUrl },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ message: "User not found" });
+
+    res.json({
+      message: "Profile updated",
+      updated,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET PROFILE (single)
+// ----------------------------
+router.get("/:id", async (req, res) => {
+  try {
+    const user = await profiles.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET ALL PROFILES
+// ----------------------------
+router.get("/", async (req, res) => {
+  try {
+    const all = await profiles.find();
+    res.json(all);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+export default router;
+import express from "express";
+import profiles from "../models/profiles.js"; // your schema model
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const router = express.Router();
+
+// ----------------------------
+// REGISTER
+router.post("/register", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      state,
+      pincode,
+      address,
+      role = "user",
+      adminCode,
+    } = req.body;
+
+    // Check required fields
+    if (
+      !name ||
+      !email ||
+      !password ||
+      !phone ||
+      !state ||
+      !pincode ||
+      !address
+    ) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check if user already exists
+    const existing = await profiles.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    // If role is admin, check adminCode
+    if (role === "admin") {
+      if (adminCode !== process.env.ADMIN_CODE) {
+        return res.status(403).json({ message: "Invalid admin code" });
+      }
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = await profiles.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      state,
+      pincode,
+      address,
+      role,
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        imageUrl: newUser.imageUrl,
+        phone: newUser.phone,
+        state: newUser.state,
+        pincode: newUser.pincode,
+        address: newUser.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// LOGIN
+// ----------------------------
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await profiles.findOne({ email });
+    if (!user) return res.status(400).json({ message: "Invalid email" });
+
+    const passMatch = await bcrypt.compare(password, user.password);
+    if (!passMatch)
+      return res.status(400).json({ message: "Invalid password" });
+
+    // Generate Access Token
+    const accessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Generate Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_REFRESH_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    // Save refresh token in DB
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({
+      message: "Login successful",
+      accessToken,
+      refreshToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        imageUrl: user.imageUrl,
+        phone: user.phone,
+        state: user.state,
+        pincode: user.pincode,
+        address: user.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// UPDATE PROFILE (phone, pincode, state, address INCLUDED)
+// ----------------------------
+router.put("/update/:id", async (req, res) => {
+  try {
+    const { name, phone, state, pincode, address, imageUrl } = req.body;
+
+    const updated = await profiles.findByIdAndUpdate(
+      req.params.id,
+      { name, phone, state, pincode, address, imageUrl },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ message: "User not found" });
+
+    res.json({
+      message: "Profile updated",
+      updated,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET PROFILE (single)
+// ----------------------------
+router.get("/:id", async (req, res) => {
+  try {
+    const user = await profiles.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET ALL PROFILES
+// ----------------------------
+router.get("/", async (req, res) => {
+  try {
+    const all = await profiles.find();
+    res.json(all);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+export default router;
+import express from "express";
+import profiles from "../models/profiles.js"; // your schema model
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const router = express.Router();
+
+// ----------------------------
+// REGISTER
+router.post("/register", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      state,
+      pincode,
+      address,
+      role = "user",
+      adminCode,
+    } = req.body;
+
+    // Check required fields
+    if (
+      !name ||
+      !email ||
+      !password ||
+      !phone ||
+      !state ||
+      !pincode ||
+      !address
+    ) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check if user already exists
+    const existing = await profiles.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    // If role is admin, check adminCode
+    if (role === "admin") {
+      if (adminCode !== process.env.ADMIN_CODE) {
+        return res.status(403).json({ message: "Invalid admin code" });
+      }
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = await profiles.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      state,
+      pincode,
+      address,
+      role,
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        imageUrl: newUser.imageUrl,
+        phone: newUser.phone,
+        state: newUser.state,
+        pincode: newUser.pincode,
+        address: newUser.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// LOGIN
+// ----------------------------
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await profiles.findOne({ email });
+    if (!user) return res.status(400).json({ message: "Invalid email" });
+
+    const passMatch = await bcrypt.compare(password, user.password);
+    if (!passMatch)
+      return res.status(400).json({ message: "Invalid password" });
+
+    // Generate Access Token
+    const accessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Generate Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_REFRESH_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    // Save refresh token in DB
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({
+      message: "Login successful",
+      accessToken,
+      refreshToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        imageUrl: user.imageUrl,
+        phone: user.phone,
+        state: user.state,
+        pincode: user.pincode,
+        address: user.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// UPDATE PROFILE (phone, pincode, state, address INCLUDED)
+// ----------------------------
+router.put("/update/:id", async (req, res) => {
+  try {
+    const { name, phone, state, pincode, address, imageUrl } = req.body;
+
+    const updated = await profiles.findByIdAndUpdate(
+      req.params.id,
+      { name, phone, state, pincode, address, imageUrl },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ message: "User not found" });
+
+    res.json({
+      message: "Profile updated",
+      updated,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET PROFILE (single)
+// ----------------------------
+router.get("/:id", async (req, res) => {
+  try {
+    const user = await profiles.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET ALL PROFILES
+// ----------------------------
+router.get("/", async (req, res) => {
+  try {
+    const all = await profiles.find();
+    res.json(all);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+export default router;
+import express from "express";
+import profiles from "../models/profiles.js"; // your schema model
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const router = express.Router();
+
+// ----------------------------
+// REGISTER
+router.post("/register", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      state,
+      pincode,
+      address,
+      role = "user",
+      adminCode,
+    } = req.body;
+
+    // Check required fields
+    if (
+      !name ||
+      !email ||
+      !password ||
+      !phone ||
+      !state ||
+      !pincode ||
+      !address
+    ) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check if user already exists
+    const existing = await profiles.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    // If role is admin, check adminCode
+    if (role === "admin") {
+      if (adminCode !== process.env.ADMIN_CODE) {
+        return res.status(403).json({ message: "Invalid admin code" });
+      }
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = await profiles.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      state,
+      pincode,
+      address,
+      role,
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        imageUrl: newUser.imageUrl,
+        phone: newUser.phone,
+        state: newUser.state,
+        pincode: newUser.pincode,
+        address: newUser.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// LOGIN
+// ----------------------------
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await profiles.findOne({ email });
+    if (!user) return res.status(400).json({ message: "Invalid email" });
+
+    const passMatch = await bcrypt.compare(password, user.password);
+    if (!passMatch)
+      return res.status(400).json({ message: "Invalid password" });
+
+    // Generate Access Token
+    const accessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Generate Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_REFRESH_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    // Save refresh token in DB
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({
+      message: "Login successful",
+      accessToken,
+      refreshToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        imageUrl: user.imageUrl,
+        phone: user.phone,
+        state: user.state,
+        pincode: user.pincode,
+        address: user.address,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// UPDATE PROFILE (phone, pincode, state, address INCLUDED)
+// ----------------------------
+router.put("/update/:id", async (req, res) => {
+  try {
+    const { name, phone, state, pincode, address, imageUrl } = req.body;
+
+    const updated = await profiles.findByIdAndUpdate(
+      req.params.id,
+      { name, phone, state, pincode, address, imageUrl },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ message: "User not found" });
+
+    res.json({
+      message: "Profile updated",
+      updated,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET PROFILE (single)
+// ----------------------------
+router.get("/:id", async (req, res) => {
+  try {
+    const user = await profiles.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// ----------------------------
+// GET ALL PROFILES
+// ----------------------------
+router.get("/", async (req, res) => {
+  try {
+    const all = await profiles.find();
+    res.json(all);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+export default router;
+import express from "express";
+import profiles from "../models/profiles.js"; // your schema model
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const router = express.Router();
+
+// ----------------------------
+// REGISTER
+router.post("/register", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      state,
+      pincode,
+      address,
+      role = "user",
+      adminCode,
+    } = req.body;
+
+    // Check required fields
+    if (
+      !name ||
+      !email ||
+      !password ||
+      !phone ||
+      !state ||
+      !pincode ||
+      !address
+    ) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check if user already exists
+    const existing = await profiles.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    // If role is admin, check adminCode
+    if (role === "admin") {
+      if (adminCode !== process.env.ADMIN_CODE) {
+        return res.status(403).json({ message: "Invalid admin code" });
+      }
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = await profiles.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      state,
+      pincode,
+      address,
+      role,
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        imageUrl: newUser.imageUrl,
+        phone: newUser.phone,
+        state: newUser.state,
+        pincode: newUser.pincode,
+        address: newUser.address,
+      },
     });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
